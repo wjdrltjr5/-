@@ -103,7 +103,7 @@ WHERE createDate BETWEEN '2023-01-15 00:00:00' AND '2023-01-15 23:59:59'
 
 -   인덱스가 있더라도 db엔진이 풀테이블스캔이 더 나은 선택이라고 판단하면 인덱스 안탐
 
-HINT 활용하기.
+### HINT 활용하기.
 
 -   데이터베이스 엔진이 최적에 쿼리 실행을 결정 하겠지만
     -   상황에 따라서 개발자가 확인을 하여 쿼리 개선을 해줘야하는 경우도 간혹 있습니다.
@@ -132,7 +132,7 @@ and
 ;
 ```
 
-Mysql Profiling
+### Mysql Profiling
 
 -   Mysql에서는 쿼리가 처리되는 동안 각 단계별 작업이 얼마나 걸렸는지 확인할 수 있는 기능을 제공
 -   프로파일링 기능을 활성화 여부 확인
@@ -176,3 +176,89 @@ show profile cpu for query 번호;
 ```
 
 이것을 가지고 인덱스 사용전/후 시간비교
+
+## 비동기
+
+여보소 푸쉬 알림 비동기로 처리하면 어떨까
+
+-   동기방식 이어야 하는 경우
+
+    -   결제API에서 pg사로 결제 요청후 응답을 받고 추가 작업 하는 경우
+    -   사전 작업 완료가 된 후 이어서 다음 작업을 할 수 있는 경우
+
+-   비동기 방식을 활용해도 되는 경우
+    -   어떠한 알림 발송
+    -   여러명의 사용자에게 쿠폰 발송을 한다면
+
+Java completeFuture 를 활용한 비동기 처리
+
+```
+@Override
+    public long sendAll() {
+        List<Notice> notices = noticeService.getAllNotices();
+        long beforeTime = System.currentTimeMillis();
+
+        /* 동기 방식 */
+        notices.forEach(notice ->
+                sendLog(notice.getTitle())
+        );
+
+        long afterTime = System.currentTimeMillis();
+        long diffTime = afterTime - beforeTime;
+        log.info("실행 시간(ms): " + diffTime);
+        return diffTime;
+    }
+
+    public void sendLog(String message) {
+        try {
+            Thread.sleep(5); // 임의의 작업시간을 주기위해 설정
+            log.info("message : {}", message);
+        }catch (Exception e) {
+            log.error("[Error] : {} ",e.getMessage());
+        }
+    }
+
+------
+
+
+public long sendAll() {
+    List<Notice> notices = noticeService.getAllNotices(); // 5000건
+    long beforeTime = System.currentTimeMillis();
+
+	  /* 비동기 방식 */
+    notices.forEach(notice ->
+            CompletableFuture.runAsync(() -> sendLog(notice.getTitle()))
+                    .exceptionally(throwable -> {
+												// 개발자 담당자한테 web hook 및 전달할 있게 처리하기.
+                        log.error("Exception occurred: " + throwable.getMessage());
+                        return null;
+                    })
+    );
+
+    long afterTime = System.currentTimeMillis();
+    long diffTime = afterTime - beforeTime;
+    log.info("실행 시간(ms): " + diffTime);
+    return diffTime;
+}
+
+
+public void sendLog(String message) {
+    try {
+        Thread.sleep(5); // 발송처리 시간이라고 가정하고 처리
+        log.info("message : {}", message);
+    }catch (Exception e) {
+        log.error("[Error] : {} ",e.getMessage());
+    }
+}
+```
+
+비동기 처리가 실패한 경우 감지할 수 있게 예외처리 해주기.
+.exceptionally(throwable -> {
+// 어떤 발송처리가 실패하였는지
+// 개발/기획 담당자한테 web hook 및 전달할 있게 추가 처리가 필요.
+log.error("Exception occurred: " + throwable.getMessage());
+return null;
+})
+
+-   thread pool 설정
+    -   thread pool 설정을 하지 않는다면 common pool 을 사용하게 되는데 사용하지 않도록 별도에 thread pool에 thread를 사용하도록 설정
